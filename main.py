@@ -41,9 +41,7 @@ def adaptive_focus_correction(
     """Adaptive focus with periodic SHWFS/PF imaging and focus sweeps."""
     
     setup_socket()
-    if not savedir.endswith('/'):
-        savedir += '/'
-    savedir = Path(savedir)
+    savedir = normalize_savedir(savedir)
     
     # Initialize cameras once
     zwo_cam = ZWOASICamera(ASI_filename='lib\\ASICamera2.dll')
@@ -132,17 +130,27 @@ def adaptive_focus_correction(
 def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points):
     """Perform focus sweep, find best focus, apply correction."""
     focus_pos = np.linspace(focus_range[0], focus_range[1], num_points)
-    focus_deltas = np.insert(np.diff(focus_pos), 0, focus_pos[0])
+    focus_deltas = compute_focus_deltas(focus_pos)
     
     sharpness = []
-    for pos, delta in zip(focus_pos, focus_deltas):
-        focus(delta)
-        time.sleep(0.5)
-        subfolder = zwo_cam.create_timestamp_subfolder(savedir / 'focus_sweep')
-        imgs, filenames, _, timestamps = zwo_cam.capture_imgs(
-            object_name='sweep', exptime=0.01, nimages=5)
-        paths = zwo_cam.save_data(save_fits=True, save_bmp=False,
-            imgs=imgs, filenames=filenames, timestamps=timestamps, savedir=subfolder)
+    tracker = {'moved': 0.0}
+    try:
+        for pos, delta in zip(focus_pos, focus_deltas):
+            focus(delta)
+            tracker['moved'] += delta
+            time.sleep(0.5)
+            subfolder = zwo_cam.create_timestamp_subfolder(savedir / 'focus_sweep')
+            imgs, filenames, _, timestamps = zwo_cam.capture_imgs(
+                object_name='sweep', exptime=0.01, nimages=5)
+            paths = zwo_cam.save_data(save_fits=True, save_bmp=False,
+                imgs=imgs, filenames=filenames, timestamps=timestamps, savedir=subfolder)
+    except KeyboardInterrupt:
+        print('\nFocus sweep interrupted by user.')
+    finally:
+        # Always return to original focus position
+        if tracker['moved'] != 0:
+            print(f'Returning focus to origin (undoing {tracker["moved"]:.1f})...')
+            focus(-tracker['moved'])
             
     #Implement Peter's code here for best focus position
 
@@ -151,15 +159,14 @@ def _correct_tip_tilt(fits_path):
     """Correct tip/tilt from centroid."""
     with fits.open(fits_path) as hdul:
         img = hdul[0].data
-        center = np.array(img.shape) / 2
-        threshold = np.mean(img) + 10 * np.std(img)
-        y_idx, x_idx = np.where(img > threshold)
-        if len(x_idx) == 0:
+        offsets = compute_centroid_offset(img, sigma_threshold=10)
+        if offsets is None:
             return
-        offset = np.array([np.mean(x_idx) - center[1], np.mean(y_idx) - center[0]])
-        offset_arcsec = offset * 0.195
-        tip(0.5 * offset_arcsec[1] / 2)
-        tilt(0.5 * offset_arcsec[0] / 2)
+        x_offset, y_offset = offsets
+        pixel_scale = 0.195  # arcsec/pixel
+        gain = 0.5
+        tip(gain * y_offset * pixel_scale / 2)
+        tilt(gain * x_offset * pixel_scale / 2)
         time.sleep(0.5)
 
 def _plot_pf_image(fits_path):
