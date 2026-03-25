@@ -51,11 +51,13 @@ def adaptive_focus_correction(
     
     base_folder = savedir / f"{datetime.now().strftime('%Y%m%d')}"
     base_folder.mkdir(parents=True, exist_ok=True)
-                
+    
+    roi = steer_focus_into_roi(zwo_cam, width=512, height=512, exptime=pf_exptime, nimages=1, savedir=base_folder, roi_factor_safety=0.4)
     try:
         last_shwfs_pf = last_sweep = time.time()
         start_time = time.time()
         iteration = 0
+
         
         while True:            
             now = time.time()
@@ -110,14 +112,65 @@ def adaptive_focus_correction(
         ids_cam.manual_shutdown()
         del zwo_cam, ids_cam
         socket.close()
+        
+def steer_focus_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=None, exptime=0.01, nimages=1, roi_factor_safety = 0.8,savedir=None):
+    """Steer focus into ROI defined by centroid."""
+    current_x, current_y, current_width, current_height = zwo_cam.get_roi()
+    current_x, current_y, current_width, current_height = roi_convert_topleft_to_centered(current_x, current_y, current_width, current_height)
 
+    new_x = cent_x if cent_x is not None else current_x
+    new_y = cent_y if cent_y is not None else current_y
+    new_width = width if width is not None else current_width
+    new_height = height if height is not None else current_height
+    
+    # Define ROI around centroid
+    x_min = int(new_x - new_width / 2)
+    x_max = int(new_x + new_width / 2)
+    y_min = int(new_y - new_height / 2)
+    y_max = int(new_y + new_height / 2)
+    
+    # Capture images and compute centroid offset. 
+    temp_savedir = savedir / f"centroiding"
+    temp_savedir.mkdir(parents=True, exist_ok=True)
+    
+    pixel_scale = 0.195  # arcsec/pixel
+    gain = 0.5
+    iteration = 0
+    while True:   
+        pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exptime, nimages=nimages,
+                                        savedir=temp_savedir)
 
-def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points):
+        if pf_paths:
+            with fits.open(pf_paths[-1]) as hdul:
+                img = hdul[0].data
+                #This is assuming offset wrt image center 
+                offsets = compute_centroid_offset(img, sigma_threshold=10)
+
+                if offsets is not None:
+                    x_offset, y_offset = offsets
+                    print(f"ROI iteration {iteration}: Centroid offsets (pixels) = {x_offset:.2f}, {y_offset:.2f}")
+                    if np.abs(x_offset) < new_width*roi_factor_safety/2 and np.abs(y_offset) < new_height*roi_factor_safety/2:
+                        break
+                
+                    tip(gain * y_offset * pixel_scale / 2)
+                    tilt(gain * x_offset * pixel_scale / 2)
+                    time.sleep(0.5)
+                iteration += 1
+
+    
+    new_x, new_y, new_width, new_height = roi_convert_centered_to_topleft(new_x, new_y, new_width, new_height)
+    zwo_cam.set_roi(new_x, new_y, new_width, new_height)
+    return [new_x, new_y, new_width, new_height]
+
+    
+    
+
+def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points, pf_exptime, nimages=5):
     """Perform focus sweep, find best focus, apply correction."""
     focus_pos = np.linspace(focus_range[0], focus_range[1], num_points)
     focus_deltas = compute_focus_deltas(focus_pos)
+    focus_datetime = datetime.now().strftime('%H%M%S')
     
-    sharpness = []
     tracker = {'moved': 0.0}
     try:
         for pos, delta in zip(focus_pos, focus_deltas):
