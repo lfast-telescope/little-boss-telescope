@@ -74,30 +74,13 @@ def adaptive_focus_correction(
                     filenames=ids_filenames, timestamps=ids_timestamps, savedir=base_subfolder)
                 print(f"[{iteration}] SHWFS captured")
                 
-                # CRITICAL: Settle time for USB bus to stabilize
+                # Settle time for USB bus to stabilize
                 time.sleep(1)
                               
                 # PF capture with retry logic and camera reset
-                max_retries = 3
-                pf_paths = None
-                for attempt in range(max_retries):
-                    try:
-                        zwo_imgs, zwo_filenames, _, zwo_timestamps = zwo_cam.capture_imgs(
-                            object_name='pf', exptime=pf_exptime, nimages=10) 
-                        pf_paths = zwo_cam.save_data(save_fits=True, save_bmp=False,
-                            imgs=zwo_imgs, filenames=zwo_filenames, timestamps=zwo_timestamps, savedir=base_subfolder)
-                        print(f"[{iteration}] PF captured successfully")
-                        break
-                    except Exception as e:
-                        print(f"[{iteration}] PF capture attempt {attempt+1}/{max_retries} failed: {e}")
-                        if attempt < max_retries - 1:
-                            # Hard reset camera on retry to clear exposure state corruption
-                            zwo_cam.camera.stop_video_capture()
-                            time.sleep(0.5)
-                            print(f"[{iteration}] Camera reset, retrying...")
-                            time.sleep(1.5)
-                        else:
-                            print(f"[{iteration}] PF capture failed after {max_retries} attempts, skipping")
+                pf_paths = capture_zwo_with_retry(
+                    zwo_cam, object_name='pf', exptime=pf_exptime,
+                    nimages=10, savedir=base_subfolder, label=str(iteration), roi=roi)
                 
                 if pf_paths:
                     if do_tip_tilt_correct:
@@ -139,11 +122,11 @@ def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points)
             focus(delta)
             tracker['moved'] += delta
             time.sleep(0.5)
-            subfolder = zwo_cam.create_timestamp_subfolder(savedir / 'focus_sweep')
-            imgs, filenames, _, timestamps = zwo_cam.capture_imgs(
-                object_name='sweep', exptime=0.01, nimages=5)
-            paths = zwo_cam.save_data(save_fits=True, save_bmp=False,
-                imgs=imgs, filenames=filenames, timestamps=timestamps, savedir=subfolder)
+            subfolder = zwo_cam.create_timestamp_subfolder(savedir,f'FocusSweep_{focus_datetime}')
+
+            pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=pf_exptime,
+                                              nimages=nimages, savedir=subfolder)
+
     except KeyboardInterrupt:
         print('\nFocus sweep interrupted by user.')
     finally:
