@@ -24,6 +24,7 @@ from astro_pipeline.onsky_processing import *
 
 socket = SocketClient()
 
+
 def adaptive_focus_correction(
     savedir,
     duration_minutes=None,
@@ -89,10 +90,11 @@ def adaptive_focus_correction(
                         _plot_pf_image(pf_paths[-1])
                 
                 last_shwfs_pf = time.time()
+                now = time.time()
             
             # Focus sweep
             if now - last_sweep >= focus_sweep_interval_sec:
-                _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_sweep_range, focus_sweep_points)
+                _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_sweep_range, focus_sweep_points, pf_exptime, nimages=10)
                 print(f"[{iteration}] Focus sweep completed")
                 last_sweep = time.time()
             
