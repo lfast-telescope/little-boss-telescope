@@ -111,7 +111,7 @@ def extended_observation(
     
     finally:
         ids_cam.manual_shutdown()
-        del zwo_cam, ids_cam
+        del zwo_cam, ids_cam #investigate this later: seems cranky about zwoasi.__init__.__del__
         socket.close()
         
 def steer_spot_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=None, exptime=0.01, nimages=1, roi_factor_safety = 0.8,savedir=None):
@@ -170,7 +170,7 @@ def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points,
     """Perform focus sweep, find best focus, apply correction."""
     if exposure_time_lut is  None:
         exposure_time_lut = [-0.01 for x in range(num_points)] 
-    backlash = 0  # µm, adjust as needed
+    backlash = 380  # µm, adjust as needed
     focus_pos = np.linspace(focus_range[0], focus_range[1], num_points)
     focus_deltas = compute_focus_deltas(focus_pos)
     focus_datetime = datetime.now().strftime('%H%M%S')
@@ -237,11 +237,76 @@ def _plot_pf_image(fits_path):
         plt.title('PF')
         plt.show()
 
+
+def investigate_backlash(
+        savedir,
+        duration_minutes=30,
+        shwfs_pf_interval_sec=30,
+        focus_sweep_interval_sec=1,
+        focus_sweep_range=(-600, 600),
+        focus_sweep_points=9,
+        do_tip_tilt_correct=True,
+        do_focus_correct=True,
+        plot_pf_output=False,
+        pf_exptime=-0.1,
+        shwfs_exptime=120,
+        number_repetitions=5
+    ):
+    
+    setup_socket()
+    savedir = normalize_savedir(savedir)
+    
+    # Initialize cameras once
+    zwo_cam = ZWOASICamera(ASI_filename='lib\\ASICamera2.dll')
+    ids_cam = IDSCamera()
+    ids_cam.manual_startup()
+    
+    base_folder = savedir / f"{datetime.now().strftime('%Y%m%d')}"
+    base_folder.mkdir(parents=True, exist_ok=True)
+    roi = steer_spot_into_roi(zwo_cam, width=512, height=512, exptime=pf_exptime, nimages=1, savedir=base_folder, roi_factor_safety=0.4)
+    pf_exptime = zwo_cam.exptime  # Update exptime so you stop autofocusing
+    
+    all_fwhm = []
+    for i in range(number_repetitions):
+        focus_pos, fwhm_arr = _focus_sweep_and_correct(
+            zwo_cam, ids_cam, savedir, focus_sweep_range, focus_sweep_points,
+            pf_exptime, nimages=5, plot_multiple_sweeps=True)
+        all_fwhm.append(fwhm_arr)
+        print(f"[{i}] Focus sweep completed")
+
+    # Overlay all sweeps with sequential colors
+    fig, ax = plt.subplots()
+    n = len(all_fwhm)
+    for i, fwhm_arr in enumerate(all_fwhm):
+        color = plt.cm.cool(i / max(n - 1, 1))
+        ax.plot(focus_pos, fwhm_arr, 'o-', color=color, label=f'Sweep {i}')
+    ax.set_xlabel('Focus Position [µm]')
+    ax.set_ylabel('FWHM [pixels]')
+    ax.set_title('Backlash Investigation: Repeated Focus Sweeps')
+    ax.legend()
+    plt.savefig(base_folder / 'backlash_all_sweeps.jpg')
+    plt.close()
+    
 if __name__ == "__main__":
     savedir = '/home/steward/lfast/star_testing/'
     
-    adaptive_focus_correction(
-        savedir=savedir,
+    investigate_backlash(
+        savedir,
+        duration_minutes=30,
+        shwfs_pf_interval_sec=30,
+        focus_sweep_interval_sec=1,
+        focus_sweep_range=(-600, 600),
+        focus_sweep_points=9,
+        do_tip_tilt_correct=True,
+        do_focus_correct=True,
+        plot_pf_output=False,
+        pf_exptime=-0.1,
+        shwfs_exptime=120,
+        number_repetitions=5
+    )
+    
+    extended_observation(
+        savedir,
         duration_minutes=30,
         shwfs_pf_interval_sec=30,
         focus_sweep_interval_sec=1,
