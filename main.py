@@ -97,7 +97,7 @@ def extended_observation(
             
             # Focus sweep
             if now - last_sweep >= focus_sweep_interval_sec:
-                _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_sweep_range, focus_sweep_points, pf_exptime, nimages=10)
+                _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_sweep_range, focus_sweep_points, pf_exptime, nimages=5)
                 print(f"[{iteration}] Focus sweep completed")
                 last_sweep = time.time()
             
@@ -168,20 +168,28 @@ def steer_spot_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=No
     
 def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points, pf_exptime, nimages=5, exposure_time_lut=None, plot_multiple_sweeps=False):
     """Perform focus sweep, find best focus, apply correction."""
+    if exposure_time_lut is  None:
+        exposure_time_lut = [-0.01 for x in range(num_points)] 
+    backlash = 0  # µm, adjust as needed
     focus_pos = np.linspace(focus_range[0], focus_range[1], num_points)
     focus_deltas = compute_focus_deltas(focus_pos)
     focus_datetime = datetime.now().strftime('%H%M%S')
     
     tracker = {'moved': 0.0}
     try:
-        for pos, delta in zip(focus_pos, focus_deltas):
+        for num, (pos, delta) in enumerate(zip(focus_pos, focus_deltas)):
             focus(delta)
+            if num == 0:
+                focus(-backlash)
+                focus(backlash)
             tracker['moved'] += delta
             time.sleep(0.5)
             subfolder = zwo_cam.create_timestamp_subfolder(savedir,f'FocusSweep_{focus_datetime}')
 
-            pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=pf_exptime,
+            pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exposure_time_lut[num],
                                               nimages=nimages, savedir=subfolder)
+            exposure_time_lut[num] = zwo_cam.exptime  # Update LUT with actual exptime used
+            _correct_tip_tilt(pf_paths[-1])
 
     except KeyboardInterrupt:
         print('\nFocus sweep interrupted by user.')
@@ -192,6 +200,18 @@ def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points,
             focus(-tracker['moved'])
             
     #Implement Peter's code here for best focus position
+    #Need to verify file hierarchy and save these files to a focus_sweep dir.
+    subdirs = os.listdir(subfolder.parent)
+    reduction = RED(subfolder.parent, subfolder.parent)
+    result = reduction.reduce_focus_sweep(focus_arr=focus_pos, subdirs=subdirs, visualize=False, specific_suffix=".zwo.fits", plot_multiple_sweeps=plot_multiple_sweeps)
+
+    if plot_multiple_sweeps:
+        return focus_pos, result  # result is fwhm_arr
+
+    optimal_focus = result
+    print(f'Optimal Focus: {optimal_focus:.2f} [µm]. Moving there now.')
+    focus(-backlash)  # Apply backlash correction before final move
+    focus(optimal_focus - tracker['moved'])
 
 
 def _correct_tip_tilt(fits_path):
