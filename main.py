@@ -25,7 +25,7 @@ from astro_pipeline.onsky_processing import *
 socket = SocketClient()
 
 
-def adaptive_focus_correction(
+def extended_observation(
     savedir,
     duration_minutes=None,
     num_iterations=None,
@@ -51,8 +51,9 @@ def adaptive_focus_correction(
     
     base_folder = savedir / f"{datetime.now().strftime('%Y%m%d')}"
     base_folder.mkdir(parents=True, exist_ok=True)
+    roi = steer_spot_into_roi(zwo_cam, width=512, height=512, exptime=pf_exptime, nimages=1, savedir=base_folder, roi_factor_safety=0.4)
+    pf_exptime = zwo_cam.exptime  # Update exptime so you stop autofocusing
     
-    roi = steer_focus_into_roi(zwo_cam, width=512, height=512, exptime=pf_exptime, nimages=1, savedir=base_folder, roi_factor_safety=0.4)
     try:
         last_shwfs_pf = last_sweep = time.time()
         start_time = time.time()
@@ -113,7 +114,7 @@ def adaptive_focus_correction(
         del zwo_cam, ids_cam
         socket.close()
         
-def steer_focus_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=None, exptime=0.01, nimages=1, roi_factor_safety = 0.8,savedir=None):
+def steer_spot_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=None, exptime=0.01, nimages=1, roi_factor_safety = 0.8,savedir=None):
     """Steer focus into ROI defined by centroid."""
     current_x, current_y, current_width, current_height = zwo_cam.get_roi()
     current_x, current_y, current_width, current_height = roi_convert_topleft_to_centered(current_x, current_y, current_width, current_height)
@@ -139,6 +140,7 @@ def steer_focus_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=N
     while True:   
         pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exptime, nimages=nimages,
                                         savedir=temp_savedir)
+        exptime = zwo_cam.exptime  # Update exptime so you stop autofocusing
 
         if pf_paths:
             with fits.open(pf_paths[-1]) as hdul:
@@ -164,8 +166,7 @@ def steer_focus_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=N
 
     
     
-
-def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points, pf_exptime, nimages=5):
+def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points, pf_exptime, nimages=5, exposure_time_lut=None, plot_multiple_sweeps=False):
     """Perform focus sweep, find best focus, apply correction."""
     focus_pos = np.linspace(focus_range[0], focus_range[1], num_points)
     focus_deltas = compute_focus_deltas(focus_pos)
@@ -222,13 +223,13 @@ if __name__ == "__main__":
     adaptive_focus_correction(
         savedir=savedir,
         duration_minutes=30,
-        shwfs_pf_interval_sec=1,
-        focus_sweep_interval_sec=300,
-        focus_sweep_range=(-800, 800),
+        shwfs_pf_interval_sec=30,
+        focus_sweep_interval_sec=1,
+        focus_sweep_range=(-600, 600),
         focus_sweep_points=9,
         do_tip_tilt_correct=True,
         do_focus_correct=True,
         plot_pf_output=False,
-        pf_exptime=0.01,
+        pf_exptime=-0.1,
         shwfs_exptime=120
     )
