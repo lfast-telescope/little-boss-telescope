@@ -44,6 +44,8 @@ def extended_observation(
     setup_socket()
     savedir = normalize_savedir(savedir)
     
+    _alignment_tracking = mirror_alignment() # not sure if it should initialize here or by itself in __main__
+    
     # Initialize cameras once
     zwo_cam = ZWOASICamera(ASI_filename='lib\\ASICamera2.dll')
     ids_cam = IDSCamera()
@@ -84,7 +86,8 @@ def extended_observation(
                 # PF capture with retry logic and camera reset
                 pf_paths = capture_zwo_with_retry(
                     zwo_cam, object_name='pf', exptime=pf_exptime,
-                    nimages=10, savedir=base_subfolder, label=str(iteration), roi=roi)
+                    nimages=10, savedir=base_subfolder, label=str(iteration), roi=roi,
+                    extra_header=_alignment_tracking.export_header())
                 
                 if pf_paths:
                     if do_tip_tilt_correct:
@@ -139,7 +142,7 @@ def steer_spot_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=No
     iteration = 0
     while True:   
         pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exptime, nimages=nimages,
-                                        savedir=temp_savedir)
+                                        savedir=temp_savedir, extra_header=_alignment_tracking.export_header())
         exptime = zwo_cam.exptime  # Update exptime so you stop autofocusing
 
         if pf_paths:
@@ -187,7 +190,7 @@ def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points,
             subfolder = zwo_cam.create_timestamp_subfolder(savedir,f'FocusSweep_{focus_datetime}')
 
             pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exposure_time_lut[num],
-                                              nimages=nimages, savedir=subfolder)
+                                              nimages=nimages, savedir=subfolder, extra_header=_alignment_tracking.export_header())
             exposure_time_lut[num] = zwo_cam.exptime  # Update LUT with actual exptime used
             _correct_tip_tilt(pf_paths[-1])
 
@@ -290,6 +293,8 @@ def investigate_backlash(
 if __name__ == "__main__":
     savedir = '/home/steward/lfast/star_testing/'
     
+    #_alignment_tracking = mirror_alignment()
+    
     investigate_backlash(
         savedir,
         duration_minutes=30,
@@ -304,6 +309,8 @@ if __name__ == "__main__":
         shwfs_exptime=120,
         number_repetitions=5
     )
+    
+    #_alignment_tracking.reset()    # call if want to reset relative tracking values
     
     extended_observation(
         savedir,
