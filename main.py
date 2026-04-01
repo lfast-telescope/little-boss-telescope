@@ -35,6 +35,7 @@ def extended_observation(
     focus_sweep_points=9,
     do_tip_tilt_correct=True,
     do_focus_correct=True,
+    track_alignment=True,
     plot_pf_output=False,
     pf_exptime=0.01,
     shwfs_exptime=120
@@ -44,7 +45,7 @@ def extended_observation(
     setup_socket()
     savedir = normalize_savedir(savedir)
     
-    _alignment_tracking = mirror_alignment() # not sure if it should initialize here or by itself in __main__
+    if track_alignment: _alignment_tracking = mirror_alignment() # not sure if it should initialize here or by itself in __main__
     
     # Initialize cameras once
     zwo_cam = ZWOASICamera(ASI_filename='lib\\ASICamera2.dll')
@@ -82,12 +83,17 @@ def extended_observation(
                 
                 # Settle time for USB bus to stabilize
                 time.sleep(1)
+                
+                try:
+                    extra_header = _alignment_tracking.export_header()
+                except NameError:
+                    extra_header = None
                               
                 # PF capture with retry logic and camera reset
                 pf_paths = capture_zwo_with_retry(
                     zwo_cam, object_name='pf', exptime=pf_exptime,
                     nimages=10, savedir=base_subfolder, label=str(iteration), roi=roi,
-                    extra_header=_alignment_tracking.export_header())
+                    extra_header=extra_header)
                 
                 if pf_paths:
                     if do_tip_tilt_correct:
@@ -141,8 +147,14 @@ def steer_spot_into_roi(zwo_cam, cent_x=None, cent_y=None, width=None, height=No
     gain = 0.5
     iteration = 0
     while True:   
+        
+        try:
+            extra_header = _alignment_tracking.export_header()
+        except NameError:
+            extra_header = None
+        
         pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exptime, nimages=nimages,
-                                        savedir=temp_savedir, extra_header=_alignment_tracking.export_header())
+                                        savedir=temp_savedir, extra_header=extra_header)
         exptime = zwo_cam.exptime  # Update exptime so you stop autofocusing
 
         if pf_paths:
@@ -188,9 +200,14 @@ def _focus_sweep_and_correct(zwo_cam, ids_cam, savedir, focus_range, num_points,
             tracker['moved'] += delta
             time.sleep(0.5)
             subfolder = zwo_cam.create_timestamp_subfolder(savedir,f'FocusSweep_{focus_datetime}')
+            
+            try:
+                extra_header = _alignment_tracking.export_header()
+            except NameError:
+                extra_header = None
 
             pf_paths = capture_zwo_with_retry(zwo_cam, object_name='pf', exptime=exposure_time_lut[num],
-                                              nimages=nimages, savedir=subfolder, extra_header=_alignment_tracking.export_header())
+                                              nimages=nimages, savedir=subfolder, extra_header=extra_header)
             exposure_time_lut[num] = zwo_cam.exptime  # Update LUT with actual exptime used
             _correct_tip_tilt(pf_paths[-1])
 
